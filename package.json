@@ -1,0 +1,56 @@
+{
+  "name": "personal-todolist",
+  "version": "0.1.0",
+  "description": "本地离线 Windows ToDoList 个人管理软件",
+  "main": "out/main/index.js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit && electron-vite build",
+    "dist": "npm run build && electron-builder",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@electron-toolkit/preload": "^3.0.2",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.16",
+    "@types/react-dom": "^18.3.5",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  },
+  "build": {
+    "appId": "com.local.personal-todolist",
+    "productName": "个人 ToDoList",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/sql.js/dist/sql-wasm.wasm",
+        "to": "sql-wasm.wasm"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
