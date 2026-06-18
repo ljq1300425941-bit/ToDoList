@@ -5,12 +5,15 @@ import initSqlJs, { Database, SqlJsStatic, SqlValue } from 'sql.js';
 import type {
   CreateListInput,
   CreateTaskInput,
+  DailyTimeEntry,
+  DailyTimeSummary,
   Task,
   Priority,
   TaskView,
   TodoList,
   UpdateListInput,
-  UpdateTaskInput
+  UpdateTaskInput,
+  WeeklyTimeTrend
 } from '../shared/types';
 
 const require = createRequire(import.meta.url);
@@ -33,6 +36,8 @@ export interface TodoRepository {
   abandonTask(id: string): Task;
   reopenTask(id: string): Task;
   reorderTodayTasks(priority: Priority, orderedTaskIds: string[]): Task[];
+  dailySummary(date: string): DailyTimeSummary;
+  weeklyTrend(date: string): WeeklyTimeTrend;
   dueForReminder(nowIso: string): Task[];
   markReminded(id: string, nowIso: string): Task;
 }
@@ -463,6 +468,88 @@ class SqlJsTodoRepository implements TodoRepository {
     return this.listTasks('today');
   }
 
+  dailySummary(date: string): DailyTimeSummary {
+    const start = startOfLocalDateIso(date);
+    const end = startOfNextLocalDateIso(date);
+    const rows = this.all<DailyTimeEntry>(
+      `SELECT
+        tasks.id AS taskId,
+        tasks.title AS taskTitle,
+        tasks.list_id AS listId,
+        lists.name AS listName,
+        lists.color AS listColor,
+        tasks.tracked_seconds AS trackedSeconds
+      FROM tasks
+      INNER JOIN lists ON lists.id = tasks.list_id
+      WHERE tasks.status = 'completed'
+        AND tasks.completed_at IS NOT NULL
+        AND tasks.completed_at >= ?
+        AND tasks.completed_at < ?
+      ORDER BY tasks.tracked_seconds > 0 DESC, tasks.tracked_seconds DESC, tasks.completed_at DESC`,
+      [start, end]
+    );
+    const totalSeconds = rows.reduce((total, entry) => total + Number(entry.trackedSeconds), 0);
+    const entries = rows.map((entry) => ({
+      ...entry,
+      trackedSeconds: Number(entry.trackedSeconds),
+      percent: totalSeconds > 0 ? (Number(entry.trackedSeconds) / totalSeconds) * 100 : 0
+    }));
+    const completedTaskCount =
+      this.scalar<number>(
+        `SELECT COUNT(*)
+        FROM tasks
+        WHERE status = 'completed'
+          AND completed_at IS NOT NULL
+          AND completed_at >= ?
+          AND completed_at < ?`,
+        [start, end]
+      ) ?? 0;
+
+    return {
+      date,
+      totalSeconds,
+      completedTaskCount,
+      entries
+    };
+  }
+
+  weeklyTrend(date: string): WeeklyTimeTrend {
+    const weekStartDate = weekStartLocalDate(date);
+    const weekEndDate = addLocalDays(weekStartDate, 6);
+    const days = Array.from({ length: 7 }, (_item, index) => {
+      const day = addLocalDays(weekStartDate, index);
+      const start = startOfLocalDateIso(day);
+      const end = startOfNextLocalDateIso(day);
+      const row = this.first<{ trackedSeconds: number; completedTaskCount: number }>(
+        `SELECT
+          COALESCE(SUM(tracked_seconds), 0) AS trackedSeconds,
+          COUNT(*) AS completedTaskCount
+        FROM tasks
+        WHERE status = 'completed'
+          AND completed_at IS NOT NULL
+          AND completed_at >= ?
+          AND completed_at < ?
+          AND tracked_seconds > 0`,
+        [start, end]
+      );
+      return {
+        date: day,
+        label: weekDayLabel(index),
+        trackedSeconds: Number(row?.trackedSeconds ?? 0),
+        completedTaskCount: Number(row?.completedTaskCount ?? 0),
+        isSelected: day === date
+      };
+    });
+
+    return {
+      weekStartDate,
+      weekEndDate,
+      selectedDate: date,
+      totalSeconds: days.reduce((total, day) => total + day.trackedSeconds, 0),
+      days
+    };
+  }
+
   dueForReminder(nowIso: string): Task[] {
     return this.queryTasks(
       "status NOT IN ('completed', 'abandoned') AND remind_at IS NOT NULL AND remind_at <= ? AND reminded_at IS NULL",
@@ -632,6 +719,46 @@ function addDaysIso(days: number): string {
   date.setHours(0, 0, 0, 0);
   date.setDate(date.getDate() + days);
   return date.toISOString();
+}
+
+function startOfLocalDateIso(date: string): string {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year, month - 1, day, 0, 0, 0, 0).toISOString();
+}
+
+function startOfNextLocalDateIso(date: string): string {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year, month - 1, day + 1, 0, 0, 0, 0).toISOString();
+}
+
+function weekStartLocalDate(date: string): string {
+  const localDate = parseLocalDate(date);
+  const day = localDate.getDay();
+  const daysSinceMonday = day === 0 ? 6 : day - 1;
+  localDate.setDate(localDate.getDate() - daysSinceMonday);
+  return formatLocalDate(localDate);
+}
+
+function addLocalDays(date: string, days: number): string {
+  const localDate = parseLocalDate(date);
+  localDate.setDate(localDate.getDate() + days);
+  return formatLocalDate(localDate);
+}
+
+function parseLocalDate(date: string): Date {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year, month - 1, day, 0, 0, 0, 0);
+}
+
+function formatLocalDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function weekDayLabel(index: number): string {
+  return ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][index];
 }
 
 function normalizeEstimatedMinutes(value: number | null): number | null {

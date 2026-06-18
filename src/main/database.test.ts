@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInMemoryTodoRepository } from './database';
 import type { Task } from '../shared/types';
 
 describe('TodoRepository', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('runs migrations repeatedly and creates a default list', async () => {
     const repo = await createInMemoryTodoRepository();
 
@@ -139,6 +143,131 @@ describe('TodoRepository', () => {
 
     expect(() => repo.reorderTodayTasks('high', [high.id, low.id])).toThrow('只能调整今日同一重要性内的任务顺序');
     expect(() => repo.reorderTodayTasks('high', [high.id, future.id])).toThrow('只能调整今日同一重要性内的任务顺序');
+  });
+
+  it('summarizes completed tracked time for the selected local day', async () => {
+    vi.useFakeTimers();
+    const repo = await createInMemoryTodoRepository();
+    const inbox = repo.listLists()[0];
+    const work = repo.createList({ name: '工作', color: '#336699' });
+
+    const planning = repo.createTask({ title: '整理计划', listId: inbox.id });
+    vi.setSystemTime(new Date('2026-06-16T01:00:00.000Z'));
+    repo.startTask(planning.id);
+    vi.setSystemTime(new Date('2026-06-16T01:30:00.000Z'));
+    repo.completeTask(planning.id);
+
+    const coding = repo.createTask({ title: '写代码', listId: work.id });
+    vi.setSystemTime(new Date('2026-06-16T03:00:00.000Z'));
+    repo.startTask(coding.id);
+    vi.setSystemTime(new Date('2026-06-16T04:30:00.000Z'));
+    repo.completeTask(coding.id);
+
+    const abandoned = repo.createTask({ title: '放弃项', listId: work.id });
+    vi.setSystemTime(new Date('2026-06-16T05:00:00.000Z'));
+    repo.startTask(abandoned.id);
+    vi.setSystemTime(new Date('2026-06-16T05:30:00.000Z'));
+    repo.abandonTask(abandoned.id);
+
+    const zeroTracked = repo.createTask({ title: '零耗时', listId: work.id });
+    repo.completeTask(zeroTracked.id);
+
+    const previousDay = repo.createTask({ title: '昨天完成', listId: inbox.id });
+    vi.setSystemTime(new Date('2026-06-15T01:00:00.000Z'));
+    repo.startTask(previousDay.id);
+    vi.setSystemTime(new Date('2026-06-15T01:45:00.000Z'));
+    repo.completeTask(previousDay.id);
+
+    const summary = repo.dailySummary('2026-06-16');
+
+    expect(summary.date).toBe('2026-06-16');
+    expect(summary.totalSeconds).toBe(7200);
+    expect(summary.completedTaskCount).toBe(3);
+    expect(summary.entries.map((entry) => entry.taskTitle)).toEqual(['写代码', '整理计划', '零耗时']);
+    expect(summary.entries[0]).toMatchObject({
+      listId: work.id,
+      listName: '工作',
+      listColor: '#336699',
+      trackedSeconds: 5400,
+      percent: 75
+    });
+    expect(summary.entries[1].percent).toBe(25);
+    expect(summary.entries[2]).toMatchObject({
+      taskTitle: '零耗时',
+      trackedSeconds: 0,
+      percent: 0
+    });
+  });
+
+  it('summarizes weekly tracked time from Monday to Sunday for the selected local day', async () => {
+    vi.useFakeTimers();
+    const repo = await createInMemoryTodoRepository();
+    const list = repo.listLists()[0];
+
+    const mondayFirst = repo.createTask({ title: '周一上午', listId: list.id });
+    vi.setSystemTime(new Date('2026-06-15T01:00:00.000Z'));
+    repo.startTask(mondayFirst.id);
+    vi.setSystemTime(new Date('2026-06-15T01:30:00.000Z'));
+    repo.completeTask(mondayFirst.id);
+
+    const mondaySecond = repo.createTask({ title: '周一下午', listId: list.id });
+    vi.setSystemTime(new Date('2026-06-15T03:00:00.000Z'));
+    repo.startTask(mondaySecond.id);
+    vi.setSystemTime(new Date('2026-06-15T03:15:00.000Z'));
+    repo.completeTask(mondaySecond.id);
+
+    const wednesday = repo.createTask({ title: '周三任务', listId: list.id });
+    vi.setSystemTime(new Date('2026-06-17T02:00:00.000Z'));
+    repo.startTask(wednesday.id);
+    vi.setSystemTime(new Date('2026-06-17T03:00:00.000Z'));
+    repo.completeTask(wednesday.id);
+
+    const outsideWeek = repo.createTask({ title: '下周任务', listId: list.id });
+    vi.setSystemTime(new Date('2026-06-22T01:00:00.000Z'));
+    repo.startTask(outsideWeek.id);
+    vi.setSystemTime(new Date('2026-06-22T02:00:00.000Z'));
+    repo.completeTask(outsideWeek.id);
+
+    const abandoned = repo.createTask({ title: '放弃项', listId: list.id });
+    vi.setSystemTime(new Date('2026-06-18T01:00:00.000Z'));
+    repo.startTask(abandoned.id);
+    vi.setSystemTime(new Date('2026-06-18T01:20:00.000Z'));
+    repo.abandonTask(abandoned.id);
+
+    const zeroTracked = repo.createTask({ title: '零耗时', listId: list.id });
+    vi.setSystemTime(new Date('2026-06-19T01:00:00.000Z'));
+    repo.completeTask(zeroTracked.id);
+
+    const trend = repo.weeklyTrend('2026-06-17');
+
+    expect(trend.weekStartDate).toBe('2026-06-15');
+    expect(trend.weekEndDate).toBe('2026-06-21');
+    expect(trend.selectedDate).toBe('2026-06-17');
+    expect(trend.totalSeconds).toBe(6300);
+    expect(trend.days).toHaveLength(7);
+    expect(trend.days.map((day) => day.date)).toEqual([
+      '2026-06-15',
+      '2026-06-16',
+      '2026-06-17',
+      '2026-06-18',
+      '2026-06-19',
+      '2026-06-20',
+      '2026-06-21'
+    ]);
+    expect(trend.days[0]).toMatchObject({
+      label: '周一',
+      trackedSeconds: 2700,
+      completedTaskCount: 2,
+      isSelected: false
+    });
+    expect(trend.days[2]).toMatchObject({
+      label: '周三',
+      trackedSeconds: 3600,
+      completedTaskCount: 1,
+      isSelected: true
+    });
+    expect(trend.days[3].trackedSeconds).toBe(0);
+    expect(trend.days[4].completedTaskCount).toBe(0);
   });
 });
 

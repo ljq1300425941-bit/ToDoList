@@ -1,25 +1,43 @@
-# 个人 ToDoList
+# Personal ToDoList
 
-一个本地离线的 Windows 桌面待办事项应用，基于 Electron、React、TypeScript 和 SQLite 构建。
+A local-first Windows desktop todo app built with Electron, React, TypeScript, and sql.js. It keeps task data on the device and focuses on day-to-day planning, time tracking, and lightweight review.
 
-## 主要功能
+## Features
 
-- 管理今日、即将到来、全部和已完成任务
-- 支持任务新增、编辑、删除、完成和恢复
-- 支持清单分类、颜色、截止时间、提醒、优先级和备注
-- 数据保存在本地用户应用数据目录
+- Manage today, upcoming, all, completed, abandoned, and per-list task views.
+- Create, edit, delete, complete, reopen, and abandon tasks.
+- Track task time with start, pause, complete, and floating timer windows.
+- Organize tasks with lists, colors, due dates, reminders, priorities, estimates, and notes.
+- Reorder today's tasks within priority groups by drag and drop.
+- Review daily completed-task time with a pie chart, task breakdown, list totals, and weekly trend bars.
+- Switch between light and dark themes.
+- Use custom frameless window controls for minimize, maximize, and close.
+- Store data locally under the Electron user data directory.
 
-## 本地运行
+## Tech Stack
+
+- Electron + electron-vite
+- React + TypeScript
+- sql.js for local persistence
+- Vitest for repository tests
+- @dnd-kit for sortable task groups
+- lucide-react for UI icons
+
+## Local Development
 
 ```bash
 npm install
 npm run dev
 ```
 
-## 常用命令
+## Common Commands
 
 ```bash
 npm test
 npm run build
 npm run dist
 ```
+
+## Data Storage
+
+Task data is saved locally in the app's user data directory. The app exposes the active database path from settings so the storage location can be inspected while developing.

@@ -1,5 +1,6 @@
 export type Priority = 'none' | 'low' | 'medium' | 'high';
 export type TaskStatus = 'pending' | 'running' | 'paused' | 'completed' | 'abandoned';
+export type Theme = 'light' | 'dark';
 
 export interface TodoList {
   id: string;
@@ -32,7 +33,40 @@ export interface Task {
   updatedAt: string;
 }
 
-export type TaskView = 'today' | 'upcoming' | 'all' | 'completed' | 'abandoned' | `list:${string}`;
+export interface DailyTimeEntry {
+  taskId: string;
+  taskTitle: string;
+  listId: string;
+  listName: string;
+  listColor: string;
+  trackedSeconds: number;
+  percent: number;
+}
+
+export interface DailyTimeSummary {
+  date: string;
+  totalSeconds: number;
+  completedTaskCount: number;
+  entries: DailyTimeEntry[];
+}
+
+export interface WeeklyTimeTrendDay {
+  date: string;
+  label: string;
+  trackedSeconds: number;
+  completedTaskCount: number;
+  isSelected: boolean;
+}
+
+export interface WeeklyTimeTrend {
+  weekStartDate: string;
+  weekEndDate: string;
+  selectedDate: string;
+  totalSeconds: number;
+  days: WeeklyTimeTrendDay[];
+}
+
+export type TaskView = 'today' | 'upcoming' | 'all' | 'completed' | 'abandoned' | 'daily-summary' | `list:${string}`;
 
 export interface CreateListInput {
   name: string;
@@ -70,6 +104,15 @@ export interface AppSettings {
 
 export interface AppApi {
   getSettings(): Promise<AppSettings>;
+  window: {
+    minimize(): Promise<void>;
+    toggleMaximize(): Promise<void>;
+    close(): Promise<void>;
+  };
+  theme: {
+    set(theme: Theme): Promise<void>;
+    onChanged(callback: (theme: Theme) => void): () => void;
+  };
   lists: {
     list(): Promise<TodoList[]>;
     create(input: CreateListInput): Promise<TodoList>;
@@ -88,6 +131,8 @@ export interface AppApi {
     abandon(id: string): Promise<Task>;
     reopen(id: string): Promise<Task>;
     reorderToday(priority: Priority, orderedTaskIds: string[]): Promise<Task[]>;
+    dailySummary(date: string): Promise<DailyTimeSummary>;
+    weeklyTrend(date: string): Promise<WeeklyTimeTrend>;
     dueForReminder(nowIso?: string): Promise<Task[]>;
     onChanged(callback: (taskId: string | null) => void): () => void;
   };

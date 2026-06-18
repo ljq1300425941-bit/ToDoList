@@ -15,10 +15,15 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   CalendarDays,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Circle,
   Clock3,
   Inbox,
   ListPlus,
+  Maximize2,
+  Minus,
+  Moon,
   Pause,
   Play,
   Plus,
@@ -26,10 +31,24 @@ import {
   Save,
   Search,
   GripVertical,
+  PieChart,
+  Sun,
   XCircle,
+  X,
   Trash2
 } from 'lucide-react';
-import type { Priority, Task, TaskStatus, TaskView, TodoList } from '../shared/types';
+import type {
+  DailyTimeEntry,
+  DailyTimeSummary,
+  Priority,
+  Task,
+  TaskStatus,
+  TaskView,
+  Theme,
+  TodoList,
+  WeeklyTimeTrend,
+  WeeklyTimeTrendDay
+} from '../shared/types';
 import './styles.css';
 
 const priorityLabels: Record<Priority, string> = {
@@ -46,7 +65,8 @@ const viewLabels: Record<string, string> = {
   upcoming: '即将到来',
   all: '全部',
   completed: '已完成',
-  abandoned: '已放弃'
+  abandoned: '已放弃',
+  'daily-summary': '每日总结'
 };
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -58,6 +78,8 @@ const statusLabels: Record<TaskStatus, string> = {
 };
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+const THEME_STORAGE_KEY = 'todo-theme';
 
 export default function App(): JSX.Element {
   const [lists, setLists] = useState<TodoList[]>([]);
@@ -71,13 +93,17 @@ export default function App(): JSX.Element {
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [theme, setTheme] = useState<Theme>(() => readStoredTheme());
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [summaryDate, setSummaryDate] = useState(() => formatDateInput(new Date()));
+  const [dailySummary, setDailySummary] = useState<DailyTimeSummary | null>(null);
+  const [weeklyTrend, setWeeklyTrend] = useState<WeeklyTimeTrend | null>(null);
   const quickTitleInputRef = useRef<HTMLInputElement>(null);
   const pendingTaskRef = useRef<Task | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
+  const selectedTask = selectedView === 'daily-summary' ? null : tasks.find((task) => task.id === selectedTaskId) ?? tasks[0] ?? null;
   const defaultListId = lists[0]?.id ?? '';
 
   const filteredTasks = useMemo(() => {
@@ -97,14 +123,25 @@ export default function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (selectedView === 'daily-summary') {
+      setTasks([]);
+      setSelectedTaskId(null);
+      void loadDailySummary();
+      return;
+    }
+
     void loadTasks(selectedView);
-  }, [selectedView]);
+  }, [selectedView, summaryDate]);
 
   useEffect(() => {
     return window.todoApi.tasks.onChanged(() => {
-      void loadTasks(selectedView);
+      if (selectedView === 'daily-summary') {
+        void loadDailySummary();
+      } else {
+        void loadTasks(selectedView);
+      }
     });
-  }, [selectedView]);
+  }, [selectedView, summaryDate]);
 
   useEffect(() => {
     return () => {
@@ -117,6 +154,15 @@ export default function App(): JSX.Element {
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    syncStoredTheme(theme);
+    void window.todoApi.theme.set(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    return window.todoApi.theme.onChanged((nextTheme) => setTheme(nextTheme));
   }, []);
 
   async function run(action: () => Promise<void>): Promise<void> {
@@ -134,6 +180,10 @@ export default function App(): JSX.Element {
   }
 
   async function loadTasks(view: TaskView = selectedView): Promise<void> {
+    if (view === 'daily-summary') {
+      return;
+    }
+
     const nextTasks = await window.todoApi.tasks.list(view);
     setTasks(nextTasks);
     setSelectedTaskId((current) => {
@@ -143,6 +193,15 @@ export default function App(): JSX.Element {
 
       return nextTasks[0]?.id ?? null;
     });
+  }
+
+  async function loadDailySummary(): Promise<void> {
+    const [nextSummary, nextTrend] = await Promise.all([
+      window.todoApi.tasks.dailySummary(summaryDate),
+      window.todoApi.tasks.weeklyTrend(summaryDate)
+    ]);
+    setDailySummary(nextSummary);
+    setWeeklyTrend(nextTrend);
   }
 
   async function createTask(event: FormEvent): Promise<void> {
@@ -330,6 +389,14 @@ export default function App(): JSX.Element {
     return viewLabels[selectedView] ?? '任务';
   }
 
+  function shiftSummaryDate(days: number): void {
+    setSummaryDate((current) => {
+      const date = new Date(`${current}T00:00:00`);
+      date.setDate(date.getDate() + days);
+      return formatDateInput(date);
+    });
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -372,6 +439,12 @@ export default function App(): JSX.Element {
             active={selectedView === 'abandoned'}
             onClick={() => setSelectedView('abandoned')}
           />
+          <SidebarButton
+            icon={<PieChart size={18} />}
+            label="每日总结"
+            active={selectedView === 'daily-summary'}
+            onClick={() => setSelectedView('daily-summary')}
+          />
         </nav>
 
         <section className="list-section">
@@ -406,44 +479,83 @@ export default function App(): JSX.Element {
         <header className="toolbar">
           <div>
             <h2>{currentTitle()}</h2>
-            <p>{filteredTasks.length} 个任务</p>
+            <p>
+              {selectedView === 'daily-summary'
+                ? `${formatSummaryDate(summaryDate)} · ${formatSeconds(dailySummary?.totalSeconds ?? 0)}`
+                : `${filteredTasks.length} 个任务`}
+            </p>
           </div>
-          <label className="search-box">
-            <Search size={17} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务" />
-          </label>
+          <div className="toolbar-actions">
+            {selectedView === 'daily-summary' ? (
+              <div className="date-controls" aria-label="每日总结日期">
+                <button type="button" title="前一天" aria-label="前一天" onClick={() => shiftSummaryDate(-1)}>
+                  <ChevronLeft size={17} />
+                </button>
+                <input
+                  type="date"
+                  value={summaryDate}
+                  onChange={(event) => setSummaryDate(event.target.value || formatDateInput(new Date()))}
+                  aria-label="选择日期"
+                />
+                <button type="button" title="后一天" aria-label="后一天" onClick={() => shiftSummaryDate(1)}>
+                  <ChevronRight size={17} />
+                </button>
+              </div>
+            ) : (
+              <label className="search-box">
+                <Search size={17} />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务" />
+              </label>
+            )}
+            <button
+              className="theme-toggle"
+              type="button"
+              title={theme === 'dark' ? '切换到浅色模式' : '切换到夜间模式'}
+              aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到夜间模式'}
+              onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+            >
+              {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+          </div>
         </header>
 
-        <form className="quick-add" onSubmit={createTask}>
-          <input
-            ref={quickTitleInputRef}
-            value={quickTitle}
-            onChange={(event) => setQuickTitle(event.target.value)}
-            placeholder="添加一个任务"
-          />
-          <input
-            type="datetime-local"
-            value={quickDue}
-            onChange={(event) => setQuickDue(event.target.value)}
-            aria-label="截止时间"
-            title={selectedView === 'today' ? '留空则默认为今天' : '截止时间'}
-          />
-          <input
-            type="number"
-            min="1"
-            step="1"
-            value={quickEstimate}
-            onChange={(event) => setQuickEstimate(event.target.value)}
-            aria-label="预估时间"
-            placeholder="预估分钟"
-          />
-          <button type="submit" title="添加任务" aria-label="添加任务">
-            <Plus size={19} />
-          </button>
-        </form>
+        <WindowControls />
+
+        {selectedView !== 'daily-summary' && (
+          <form className="quick-add" onSubmit={createTask}>
+            <input
+              ref={quickTitleInputRef}
+              value={quickTitle}
+              onChange={(event) => setQuickTitle(event.target.value)}
+              placeholder="添加一个任务"
+            />
+            <input
+              type="datetime-local"
+              value={quickDue}
+              onChange={(event) => setQuickDue(event.target.value)}
+              aria-label="截止时间"
+              title={selectedView === 'today' ? '留空则默认为今天' : '截止时间'}
+            />
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={quickEstimate}
+              onChange={(event) => setQuickEstimate(event.target.value)}
+              aria-label="预估时间"
+              placeholder="预估分钟"
+            />
+            <button type="submit" title="添加任务" aria-label="添加任务">
+              <Plus size={19} />
+            </button>
+          </form>
+        )}
 
         {error && <div className="error-banner">{error}</div>}
 
+        {selectedView === 'daily-summary' ? (
+          <DailySummaryView summary={dailySummary} weeklyTrend={weeklyTrend} />
+        ) : (
         <div className="task-list">
           {canDragToday ? (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => void reorderToday(event)}>
@@ -500,10 +612,13 @@ export default function App(): JSX.Element {
             </div>
           )}
         </div>
+        )}
       </section>
 
       <aside className="detail-panel">
-        {selectedTask ? (
+        {selectedView === 'daily-summary' ? (
+          <DailySummaryPanel summary={dailySummary} weeklyTrend={weeklyTrend} />
+        ) : selectedTask ? (
           <TaskEditor
             task={selectedTask}
             lists={lists}
@@ -542,9 +657,28 @@ if (isFloatingWindow) {
   document.body.classList.add('floating-body');
 }
 
+applyTheme(readStoredTheme());
+window.todoApi.theme.onChanged(syncStoredTheme);
+
 createRoot(root).render(
   isFloatingWindow ? <FloatingTaskWindow taskId={windowParams.get('taskId') ?? ''} /> : <App />
 );
+
+function WindowControls(): JSX.Element {
+  return (
+    <div className="window-controls" aria-label="窗口控制">
+      <button type="button" title="最小化" aria-label="最小化" onClick={() => void window.todoApi.window.minimize()}>
+        <Minus size={16} />
+      </button>
+      <button type="button" title="最大化或还原" aria-label="最大化或还原" onClick={() => void window.todoApi.window.toggleMaximize()}>
+        <Maximize2 size={15} />
+      </button>
+      <button className="window-close" type="button" title="关闭" aria-label="关闭" onClick={() => void window.todoApi.window.close()}>
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
 
 interface FloatingTaskWindowProps {
   taskId: string;
@@ -769,6 +903,182 @@ function SortableTaskRow(props: Omit<TaskRowProps, 'attributes' | 'listeners' | 
   );
 }
 
+interface DailySummaryViewProps {
+  summary: DailyTimeSummary | null;
+  weeklyTrend: WeeklyTimeTrend | null;
+}
+
+function DailySummaryView({ summary, weeklyTrend }: DailySummaryViewProps): JSX.Element {
+  const entries = summary?.entries ?? [];
+  const timedEntries = entries.filter((entry) => entry.trackedSeconds > 0);
+  const totalSeconds = summary?.totalSeconds ?? 0;
+
+  if (!summary) {
+    return (
+      <div className="summary-empty">
+        <strong>正在读取每日总结</strong>
+        <span>稍等一下，统计马上出来。</span>
+      </div>
+    );
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="daily-summary-view">
+        <div className="summary-empty">
+          <strong>这一天还没有完成任务</strong>
+          <span>完成任务后，会在这里看到每日总结。</span>
+        </div>
+        <WeeklyTrendChart trend={weeklyTrend} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="daily-summary-view">
+      <section className="summary-chart-section">
+        {timedEntries.length > 0 ? (
+          <SummaryPie entries={timedEntries} />
+        ) : (
+          <div className="summary-no-time">
+            <strong>暂无计时数据</strong>
+            <span>已完成任务会列在下方</span>
+          </div>
+        )}
+        <div className="summary-total">
+          <span>总计</span>
+          <strong>{formatSeconds(totalSeconds)}</strong>
+          <small>{summary.completedTaskCount} 个完成任务</small>
+        </div>
+      </section>
+
+      <section className="summary-legend" aria-label="每日任务耗时明细">
+        {entries.map((entry, index) => (
+          <div className="summary-entry" key={entry.taskId}>
+            <span className="summary-swatch" style={{ backgroundColor: summaryEntryColor(entry, index, entries) }} />
+            <span className="summary-entry-main">
+              <strong title={entry.taskTitle}>{entry.taskTitle}</strong>
+              <span>{entry.listName}</span>
+            </span>
+            <span className="summary-entry-time">
+              <strong>{formatSeconds(entry.trackedSeconds)}</strong>
+              <span>{formatPercent(entry.percent)}</span>
+            </span>
+          </div>
+        ))}
+      </section>
+
+      <WeeklyTrendChart trend={weeklyTrend} />
+    </div>
+  );
+}
+
+function SummaryPie({ entries }: { entries: DailyTimeEntry[] }): JSX.Element {
+  let accumulated = 0;
+  const total = entries.reduce((sum, entry) => sum + entry.trackedSeconds, 0);
+
+  return (
+    <svg className="summary-pie" viewBox="0 0 220 220" role="img" aria-label="每日任务耗时扇形图">
+      {entries.map((entry, index) => {
+        const start = accumulated / total;
+        accumulated += entry.trackedSeconds;
+        const end = accumulated / total;
+        const color = summaryEntryColor(entry, index, entries);
+
+        if (entries.length === 1) {
+          return <circle key={entry.taskId} cx="110" cy="110" r="92" fill={color} />;
+        }
+
+        return <path key={entry.taskId} d={pieSlicePath(110, 110, 92, start, end)} fill={color} />;
+      })}
+      <circle cx="110" cy="110" r="42" fill="var(--surface)" />
+    </svg>
+  );
+}
+
+function WeeklyTrendChart({ trend }: { trend: WeeklyTimeTrend | null }): JSX.Element {
+  const days = trend?.days ?? [];
+  const maxSeconds = Math.max(...days.map((day) => day.trackedSeconds), 0);
+
+  return (
+    <section className="weekly-trend-section" aria-label="每周时间趋势">
+      <div className="summary-section-header">
+        <div>
+          <h3>每周趋势</h3>
+          <span>{trend ? `${formatShortDate(trend.weekStartDate)} - ${formatShortDate(trend.weekEndDate)}` : '正在读取'}</span>
+        </div>
+      </div>
+      {trend && maxSeconds > 0 ? (
+        <div className="weekly-bars">
+          {days.map((day) => (
+            <div className={`weekly-bar-item ${day.isSelected ? 'selected' : ''}`} key={day.date}>
+              <div className="weekly-bar-track">
+                <div className="weekly-bar-fill" style={{ height: `${Math.max(8, (day.trackedSeconds / maxSeconds) * 100)}%` }} />
+              </div>
+              <strong>{day.label.slice(1)}</strong>
+              <span>{formatSeconds(day.trackedSeconds)}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="weekly-empty">这一周还没有可统计的完成任务</div>
+      )}
+    </section>
+  );
+}
+
+function DailySummaryPanel({ summary, weeklyTrend }: DailySummaryViewProps): JSX.Element {
+  const entries = summary?.entries ?? [];
+  const listTotals = summarizeByList(entries);
+  const bestDay = bestWeeklyDay(weeklyTrend?.days ?? []);
+
+  return (
+    <section className="editor-section summary-panel">
+      <div className="editor-header">
+        <h3>当日摘要</h3>
+      </div>
+      <div className="summary-stats">
+        <span>
+          <strong>{formatSeconds(summary?.totalSeconds ?? 0)}</strong>
+          <small>总耗时</small>
+        </span>
+        <span>
+          <strong>{summary?.completedTaskCount ?? 0}</strong>
+          <small>完成任务</small>
+        </span>
+      </div>
+      <div className="summary-stats">
+        <span>
+          <strong>{formatSeconds(weeklyTrend?.totalSeconds ?? 0)}</strong>
+          <small>本周总耗时</small>
+        </span>
+        <span>
+          <strong>{formatSeconds(Math.round((weeklyTrend?.totalSeconds ?? 0) / 7))}</strong>
+          <small>日均耗时</small>
+        </span>
+      </div>
+      <div className="weekly-best-day">
+        <span>最高耗时日</span>
+        <strong>{bestDay ? `${bestDay.label} · ${formatSeconds(bestDay.trackedSeconds)}` : '暂无'}</strong>
+      </div>
+      <div className="summary-list-breakdown">
+        <div className="section-title">清单汇总</div>
+        {listTotals.length > 0 ? (
+          listTotals.map((item) => (
+            <div className="summary-list-row" key={item.listId}>
+              <span className="summary-swatch" style={{ backgroundColor: item.listColor }} />
+              <span>{item.listName} · {item.completedTaskCount}项</span>
+              <strong>{formatSeconds(item.trackedSeconds)}</strong>
+            </div>
+          ))
+        ) : (
+          <div className="summary-muted">暂无可汇总的清单</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 interface TaskEditorProps {
   task: Task;
   lists: TodoList[];
@@ -979,22 +1289,28 @@ function currentTrackedSeconds(task: Task, nowTick: number): number {
 
 function formatMinutes(minutes: number): string {
   if (minutes < 60) {
-    return `${minutes} 分钟`;
+    return `${minutes}m`;
   }
 
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
-  return rest > 0 ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+  return rest > 0 ? `${hours}h ${String(rest).padStart(2, '0')}m` : `${hours}h`;
 }
 
 function formatSeconds(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const restSeconds = seconds % 60;
-  if (minutes === 0) {
-    return `${restSeconds} 秒`;
+  if (seconds < 60) {
+    return `${seconds}s`;
   }
 
-  return restSeconds > 0 ? `${formatMinutes(minutes)} ${restSeconds} 秒` : formatMinutes(minutes);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const restSeconds = seconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(restSeconds).padStart(2, '0')}s`;
+  }
+
+  return restSeconds > 0 ? `${minutes}m ${String(restSeconds).padStart(2, '0')}s` : `${minutes}m`;
 }
 
 function defaultDueForView(view: TaskView, quickDue: string): string | null {
@@ -1009,6 +1325,115 @@ function defaultDueForView(view: TaskView, quickDue: string): string | null {
   }
 
   return null;
+}
+
+type DailyListSummary = Pick<DailyTimeEntry, 'listId' | 'listName' | 'listColor' | 'trackedSeconds'> & {
+  completedTaskCount: number;
+};
+
+function summarizeByList(entries: DailyTimeEntry[]): DailyListSummary[] {
+  const totals = new Map<string, DailyListSummary>();
+  entries.forEach((entry) => {
+    const current = totals.get(entry.listId);
+    if (current) {
+      current.trackedSeconds += entry.trackedSeconds;
+      current.completedTaskCount += 1;
+      return;
+    }
+
+    totals.set(entry.listId, {
+      listId: entry.listId,
+      listName: entry.listName,
+      listColor: entry.listColor,
+      trackedSeconds: entry.trackedSeconds,
+      completedTaskCount: 1
+    });
+  });
+
+  return [...totals.values()].sort((left, right) => {
+    if (right.trackedSeconds !== left.trackedSeconds) {
+      return right.trackedSeconds - left.trackedSeconds;
+    }
+
+    return right.completedTaskCount - left.completedTaskCount;
+  });
+}
+
+function summaryEntryColor(entry: DailyTimeEntry, index: number, entries: DailyTimeEntry[]): string {
+  const sameListIndex = entries.slice(0, index + 1).filter((item) => item.listId === entry.listId).length - 1;
+  const offsets = [-8, 8, -18, 18, -28, 28];
+  return adjustHexLightness(entry.listColor, offsets[sameListIndex % offsets.length]);
+}
+
+function adjustHexLightness(hex: string, amount: number): string {
+  const normalized = hex.replace('#', '');
+  if (!/^[\da-f]{6}$/i.test(normalized)) {
+    return hex;
+  }
+
+  const next = [0, 2, 4].map((start) => {
+    const value = Number.parseInt(normalized.slice(start, start + 2), 16);
+    const adjusted = Math.max(0, Math.min(255, value + amount));
+    return adjusted.toString(16).padStart(2, '0');
+  });
+
+  return `#${next.join('')}`;
+}
+
+function pieSlicePath(cx: number, cy: number, radius: number, startRatio: number, endRatio: number): string {
+  const startAngle = startRatio * Math.PI * 2 - Math.PI / 2;
+  const endAngle = endRatio * Math.PI * 2 - Math.PI / 2;
+  const startX = cx + radius * Math.cos(startAngle);
+  const startY = cy + radius * Math.sin(startAngle);
+  const endX = cx + radius * Math.cos(endAngle);
+  const endY = cy + radius * Math.sin(endAngle);
+  const largeArc = endRatio - startRatio > 0.5 ? 1 : 0;
+
+  return `M ${cx} ${cy} L ${startX} ${startY} A ${radius} ${radius} 0 ${largeArc} 1 ${endX} ${endY} Z`;
+}
+
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatSummaryDate(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short'
+  }).format(new Date(`${value}T00:00:00`));
+}
+
+function formatShortDate(value: string): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date(`${value}T00:00:00`));
+}
+
+function formatPercent(value: number): string {
+  if (value === 0) {
+    return '0%';
+  }
+
+  return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
+}
+
+function bestWeeklyDay(days: WeeklyTimeTrendDay[]): WeeklyTimeTrendDay | null {
+  return days.reduce<WeeklyTimeTrendDay | null>((best, day) => {
+    if (day.trackedSeconds === 0) {
+      return best;
+    }
+
+    if (!best || day.trackedSeconds > best.trackedSeconds) {
+      return day;
+    }
+
+    return best;
+  }, null);
 }
 
 function emptyTitle(view: TaskView): string {
@@ -1053,6 +1478,31 @@ function saveStatusLabel(status: SaveStatus): string {
   }
 
   return '自动保存';
+}
+
+function readStoredTheme(): Theme {
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function writeStoredTheme(theme: Theme): void {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Theme preference is optional; the UI still works if storage is unavailable.
+  }
+}
+
+function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme;
+}
+
+function syncStoredTheme(theme: Theme): void {
+  applyTheme(theme);
+  writeStoredTheme(theme);
 }
 
 function toLocalInput(value: string | null): string {

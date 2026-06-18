@@ -1,8 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppApi, CreateListInput, CreateTaskInput, Priority, TaskView, UpdateListInput, UpdateTaskInput } from '../shared/types';
+import type { AppApi, CreateListInput, CreateTaskInput, Priority, TaskView, Theme, UpdateListInput, UpdateTaskInput } from '../shared/types';
 
 const api: AppApi = {
   getSettings: () => ipcRenderer.invoke('app:getSettings'),
+  window: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+    close: () => ipcRenderer.invoke('window:close')
+  },
+  theme: {
+    set: (theme: Theme) => ipcRenderer.invoke('theme:set', theme),
+    onChanged: (callback: (theme: Theme) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, theme: Theme) => callback(theme);
+      ipcRenderer.on('theme:changed', listener);
+      return () => ipcRenderer.removeListener('theme:changed', listener);
+    }
+  },
   lists: {
     list: () => ipcRenderer.invoke('lists:list'),
     create: (input: CreateListInput) => ipcRenderer.invoke('lists:create', input),
@@ -22,6 +35,8 @@ const api: AppApi = {
     reopen: (id: string) => ipcRenderer.invoke('tasks:reopen', id),
     reorderToday: (priority: Priority, orderedTaskIds: string[]) =>
       ipcRenderer.invoke('tasks:reorderToday', priority, orderedTaskIds),
+    dailySummary: (date: string) => ipcRenderer.invoke('tasks:dailySummary', date),
+    weeklyTrend: (date: string) => ipcRenderer.invoke('tasks:weeklyTrend', date),
     dueForReminder: (nowIso?: string) => ipcRenderer.invoke('tasks:dueForReminder', nowIso),
     onChanged: (callback: (taskId: string | null) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, taskId: string | null) => callback(taskId);

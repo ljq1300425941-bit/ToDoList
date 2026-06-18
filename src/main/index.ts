@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
 import { createTodoRepository, TodoRepository } from './database';
 import { startReminderService } from './reminders';
-import type { CreateListInput, CreateTaskInput, Priority, UpdateListInput, UpdateTaskInput } from '../shared/types';
+import type { CreateListInput, CreateTaskInput, Priority, Theme, UpdateListInput, UpdateTaskInput } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 let floatingWindow: BrowserWindow | null = null;
@@ -17,13 +17,16 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 640,
     title: '个人 ToDoList',
-    backgroundColor: '#f5f3ef',
+    frame: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#f7f7f4',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true
     }
   });
+  mainWindow.setMenuBarVisibility(false);
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
@@ -113,11 +116,42 @@ function notifyTasksChanged(taskId: string | null = null): void {
   });
 }
 
+function notifyThemeChanged(theme: Theme): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    window.webContents.send('theme:changed', theme);
+  });
+}
+
 function registerIpc(): void {
   ipcMain.handle('app:getSettings', () => ({
     databasePath: repository.databasePath,
     userDataPath: app.getPath('userData')
   }));
+
+  ipcMain.handle('window:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
+  });
+
+  ipcMain.handle('window:toggleMaximize', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) {
+      return;
+    }
+
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+  });
+
+  ipcMain.handle('window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close();
+  });
+
+  ipcMain.handle('theme:set', (_event, theme: Theme) => {
+    notifyThemeChanged(theme);
+  });
 
   ipcMain.handle('lists:list', () => repository.listLists());
   ipcMain.handle('lists:create', (_event, input: CreateListInput) => repository.createList(input));
@@ -178,6 +212,8 @@ function registerIpc(): void {
     notifyTasksChanged(null);
     return tasks;
   });
+  ipcMain.handle('tasks:dailySummary', (_event, date: string) => repository.dailySummary(date));
+  ipcMain.handle('tasks:weeklyTrend', (_event, date: string) => repository.weeklyTrend(date));
   ipcMain.handle('tasks:dueForReminder', (_event, nowIso?: string) =>
     repository.dueForReminder(nowIso ?? new Date().toISOString())
   );
